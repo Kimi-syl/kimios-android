@@ -323,7 +323,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun diskValue(): Int = DISK_MIN + diskBar.progress * DISK_STEP
 
     private fun loadSettings() {
-        resolutionSpinner.setSelection(prefs.getInt("resolution", 0))
+        resolutionSpinner.setSelection(prefs.getInt("resolution_v2", 0))
         cpuSpinner.setSelection(prefs.getInt("cpu", 1))
         ramBar.progress = (prefs.getInt("ram", 512) - RAM_MIN) / RAM_STEP
         diskBar.progress = (prefs.getInt("disk", DISK_MIN) - DISK_MIN) / DISK_STEP
@@ -333,7 +333,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun saveSettings() {
         prefs.edit()
-            .putInt("resolution", resolutionSpinner.selectedItemPosition)
+            .putInt("resolution_v2", resolutionSpinner.selectedItemPosition)
             .putInt("cpu", cpuSpinner.selectedItemPosition)
             .putInt("ram", ramValue())
             .putInt("disk", diskValue())
