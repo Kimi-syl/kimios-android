@@ -110,6 +110,7 @@ class QemuService : Service() {
                 "-device", "virtio-blk-device,drive=hd0",
                 "-dtb", File(filesDir, "kimios/virt.dtb").absolutePath,
                 "-L", File(filesDir, "qemu/share/qemu").absolutePath,
+                "-rtc", "base=localtime,clock=host",
                 "-semihosting-config", "enable=on,target=native",
                 "-serial", "file:${File(filesDir, "serial.log").absolutePath}",
                 "-append", "kimios.fb=${width}x${height}",

@@ -67,8 +67,9 @@ void RfbClient::set_window(ANativeWindow* window) {
     }
     window_ = window;
     if (window_ != nullptr) {
-        ANativeWindow_setBuffersGeometry(window_, kTargetWidth, kTargetHeight,
-                                         WINDOW_FORMAT_RGBA_8888);
+        const int w = fb_width_ > 0 ? fb_width_ : kTargetWidth;
+        const int h = fb_height_ > 0 ? fb_height_ : kTargetHeight;
+        ANativeWindow_setBuffersGeometry(window_, w, h, WINDOW_FORMAT_RGBA_8888);
     }
 }
 
@@ -241,6 +242,13 @@ bool RfbClient::session() {
         return false;
     }
     LOGI("VNC server init: %dx%d name=%s", fb_width_, fb_height_, name.data());
+    {
+        std::lock_guard<std::mutex> lock(window_mutex_);
+        if (window_ != nullptr) {
+            ANativeWindow_setBuffersGeometry(window_, fb_width_, fb_height_,
+                                             WINDOW_FORMAT_RGBA_8888);
+        }
+    }
     {
         char info[96];
         snprintf(info, sizeof(info), "connected, server framebuffer %dx%d", fb_width_, fb_height_);

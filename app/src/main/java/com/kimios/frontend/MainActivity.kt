@@ -41,7 +41,7 @@ import java.io.RandomAccessFile
 
 class MainActivity : Activity(), SurfaceHolder.Callback {
     companion object {
-        val RESOLUTIONS = listOf("480 x 800", "720 x 1280", "1080 x 1920", "1440 x 2560")
+        val RESOLUTIONS = listOf("Auto (fit screen)", "480 x 800", "720 x 1280", "1080 x 1920", "1440 x 2560")
         val CPUS = listOf(1, 2, 4)
         const val RAM_MIN = 128
         const val RAM_STEP = 128
@@ -73,6 +73,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val prefs by lazy { getSharedPreferences("kimios", MODE_PRIVATE) }
     private var sidebarOpen = true
     private var vmRunning = false
+    private var guestWidth = 1080
+    private var guestHeight = 1920
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -321,7 +323,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun diskValue(): Int = DISK_MIN + diskBar.progress * DISK_STEP
 
     private fun loadSettings() {
-        resolutionSpinner.setSelection(prefs.getInt("resolution", 2))
+        resolutionSpinner.setSelection(prefs.getInt("resolution", 0))
         cpuSpinner.setSelection(prefs.getInt("cpu", 1))
         ramBar.progress = (prefs.getInt("ram", 512) - RAM_MIN) / RAM_STEP
         diskBar.progress = (prefs.getInt("disk", DISK_MIN) - DISK_MIN) / DISK_STEP
@@ -338,10 +340,40 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             .apply()
     }
 
+    private fun guestResolution(): Pair<Int, Int> {
+        val position = resolutionSpinner.selectedItemPosition
+        if (position > 0) {
+            return RESOLUTIONS[position].split(" x ").let { it[0].toInt() to it[1].toInt() }
+        }
+        val metrics = windowManager.currentWindowMetrics
+        val screenW = metrics.bounds.width().coerceAtLeast(1)
+        val screenH = metrics.bounds.height().coerceAtLeast(1)
+        var w = screenW.coerceIn(480, 1440)
+        var h = (w.toLong() * screenH / screenW).toInt()
+        if (h > 2560) {
+            h = 2560
+            w = (h.toLong() * screenW / screenH).toInt().coerceIn(480, 1440)
+        }
+        return (w / 4 * 4) to (h / 4 * 4)
+    }
+
+    private fun fitSurface() {
+        val root = surfaceView.parent as? FrameLayout ?: return
+        val rootW = root.width
+        val rootH = root.height
+        if (rootW == 0 || rootH == 0) return
+        val scale = minOf(rootW.toFloat() / guestWidth, rootH.toFloat() / guestHeight)
+        val w = (guestWidth * scale).toInt().coerceAtLeast(1)
+        val h = (guestHeight * scale).toInt().coerceAtLeast(1)
+        surfaceView.layoutParams = FrameLayout.LayoutParams(w, h, Gravity.CENTER)
+    }
+
     private fun bootVm() {
         saveSettings()
-        val (w, h) = RESOLUTIONS[resolutionSpinner.selectedItemPosition]
-            .split(" x ").let { it[0].toInt() to it[1].toInt() }
+        val (w, h) = guestResolution()
+        guestWidth = w
+        guestHeight = h
+        (surfaceView.parent as? FrameLayout)?.post { fitSurface() }
         vmRunning = true
         bootButton.text = "Stop VM"
         statusView.text = "Starting…"
@@ -551,7 +583,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         NativeBridge.nativeSurfaceCreated(holder.surface)
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        fitSurface()
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         NativeBridge.nativeSurfaceDestroyed()
