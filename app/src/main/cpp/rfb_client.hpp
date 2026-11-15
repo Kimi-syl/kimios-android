@@ -33,5 +33,6 @@ private:
     int fd_ = -1;
     int fb_width_ = 0;
     int fb_height_ = 0;
+    bool first_frame_sent_ = false;
     std::vector<uint32_t> framebuffer_;
 };

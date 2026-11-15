@@ -7,6 +7,14 @@ object NativeBridge {
         System.loadLibrary("kimios-bridge")
     }
 
+    @Volatile
+    var firstFrameListener: (() -> Unit)? = null
+
+    @JvmStatic
+    fun onFirstFrameFromNative() {
+        firstFrameListener?.invoke()
+    }
+
     external fun nativeInit(qmpSocketPath: String)
     external fun nativeSurfaceCreated(surface: Surface)
     external fun nativeSurfaceDestroyed()

@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cstring>
 
+extern void kimios_first_frame();
+
 #define LOG_TAG "KimiOS-RFB"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -52,9 +54,6 @@ RfbClient::~RfbClient() {
 
 void RfbClient::set_window(ANativeWindow* window) {
     std::lock_guard<std::mutex> lock(window_mutex_);
-    if (window_ == window) {
-        return;
-    }
     if (window_ != nullptr) {
         ANativeWindow_release(window_);
     }
@@ -159,6 +158,10 @@ void RfbClient::blit() {
     }
 
     ANativeWindow_unlockAndPost(window_);
+    if (!first_frame_sent_) {
+        first_frame_sent_ = true;
+        kimios_first_frame();
+    }
 }
 
 bool RfbClient::session() {
@@ -233,6 +236,7 @@ bool RfbClient::session() {
         return false;
     }
     framebuffer_.assign(static_cast<size_t>(fb_width_) * fb_height_, 0xff000000u);
+    first_frame_sent_ = false;
 
     uint8_t pixel_format[20];
     memset(pixel_format, 0, sizeof(pixel_format));

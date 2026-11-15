@@ -40,6 +40,9 @@ object AssetInstaller {
     }
 
     private fun copyFile(context: Context, assetPath: String, target: File) {
+        if (assetPath.endsWith("disk.img") && target.exists()) {
+            return
+        }
         context.assets.open(assetPath).use { input ->
             if (target.exists() && target.length() == input.available().toLong()) {
                 return

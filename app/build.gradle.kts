@@ -10,9 +10,11 @@ android {
     defaultConfig {
         applicationId = "com.kimios.frontend"
         minSdk = 30
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // QEMU's TCG JIT needs writable+executable memory. Android enforces
+        // W^X only for apps targeting API 29+, so stay at 28 (like Termux).
+        targetSdk = 28
+        versionCode = 2
+        versionName = "0.2.0"
 
         ndk {
             abiFilters += "arm64-v8a"

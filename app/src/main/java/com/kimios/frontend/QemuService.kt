@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import java.io.File
+import java.io.RandomAccessFile
 
 class QemuService : Service() {
     companion object {
@@ -20,8 +21,17 @@ class QemuService : Service() {
         private const val CHANNEL_ID = "kimios-vm"
         private const val NOTIFICATION_ID = 1
 
-        fun start(context: Context) {
+        @Volatile var active = false
+        @Volatile var qemuPid = -1
+        @Volatile var lastStatus = "VM stopped"
+
+        fun start(context: Context, width: Int, height: Int, ramMb: Int, vcpus: Int, diskGb: Int) {
             val intent = Intent(context, QemuService::class.java)
+                .putExtra("width", width)
+                .putExtra("height", height)
+                .putExtra("ramMb", ramMb)
+                .putExtra("vcpus", vcpus)
+                .putExtra("diskGb", diskGb)
             if (Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(intent)
             } else {
@@ -32,15 +42,26 @@ class QemuService : Service() {
 
     private var process: Process? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    @Volatile private var running = false
+    private var width = 1080
+    private var height = 1920
+    private var ramMb = 512
+    private var vcpus = 2
+    private var diskGb = 8
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (running) return START_STICKY
-        running = true
+        if (active) return START_STICKY
+        intent?.let {
+            width = it.getIntExtra("width", width)
+            height = it.getIntExtra("height", height)
+            ramMb = it.getIntExtra("ramMb", ramMb)
+            vcpus = it.getIntExtra("vcpus", vcpus)
+            diskGb = it.getIntExtra("diskGb", diskGb)
+        }
+        active = true
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_text)))
+        startForeground(NOTIFICATION_ID, buildNotification(lastStatus))
 
         val power = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kimios:qemu").apply {
@@ -53,14 +74,22 @@ class QemuService : Service() {
 
     private fun boot() {
         try {
+            status("Extracting assets (first boot takes a while)")
             val binary = AssetInstaller.install(this)
             if (binary == null) {
-                status("QEMU binary missing: run scripts/install-qemu.sh and rebuild")
-                stopSelf()
+                status("QEMU binary missing from the APK")
                 return
             }
 
             val filesDir = filesDir
+            val disk = File(filesDir, "kimios/disk.img")
+            val desired = diskGb.toLong() * 1024 * 1024 * 1024
+            if (!disk.exists() || disk.length() != desired) {
+                status("Creating $diskGb GB disk (KimiFS will format it)")
+                disk.delete()
+                RandomAccessFile(disk, "rw").use { it.setLength(desired) }
+            }
+
             val qmpSocket = File(filesDir, "qmp.sock")
             qmpSocket.delete()
             NativeBridge.nativeInit(qmpSocket.absolutePath)
@@ -69,18 +98,20 @@ class QemuService : Service() {
                 binary.absolutePath,
                 "-machine", "virt,gic-version=3",
                 "-cpu", "cortex-a53",
-                "-m", "128M",
+                "-smp", vcpus.toString(),
+                "-m", "${ramMb}M",
                 "-display", "vnc=127.0.0.1:5900",
                 "-qmp", "unix:${qmpSocket.absolutePath},server,nowait",
                 "-device", "ramfb",
                 "-device", "virtio-keyboard-device",
                 "-device", "virtio-tablet-device",
-                "-drive", "if=none,format=raw,file=${File(filesDir, "kimios/disk.img").absolutePath},id=hd0",
+                "-drive", "if=none,format=raw,file=${disk.absolutePath},id=hd0",
                 "-device", "virtio-blk-device,drive=hd0",
                 "-dtb", File(filesDir, "kimios/virt.dtb").absolutePath,
                 "-L", File(filesDir, "qemu/share/qemu").absolutePath,
                 "-semihosting-config", "enable=on,target=native",
                 "-serial", "file:${File(filesDir, "serial.log").absolutePath}",
+                "-append", "kimios.fb=${width}x${height}",
                 "-kernel", File(filesDir, "kimios/kimios").absolutePath
             )
 
@@ -91,22 +122,45 @@ class QemuService : Service() {
             builder.environment()["LD_LIBRARY_PATH"] = File(filesDir, "qemu/lib").absolutePath
             builder.environment()["TMPDIR"] = filesDir.absolutePath
 
-            status("Starting QEMU")
+            status("Starting QEMU: $vcpus vCPU, $ramMb MB RAM, ${width}x${height}")
+            File(filesDir, "qemu.log").appendText("\n=== boot ${System.currentTimeMillis()} ===\n")
             process = builder.start()
-            status("KimiOS booting")
+            qemuPid = findPid()
+            status("KimiOS booting (pid $qemuPid) — watch the serial log")
 
             val code = process?.waitFor() ?: -1
             Log.i(TAG, "qemu exited with $code")
-            status("QEMU exited (code $code); see qemu.log")
+            status("QEMU exited (code $code) — see qemu.log")
         } catch (e: Exception) {
             Log.e(TAG, "boot failed", e)
             status("QEMU failed: ${e.message}")
         } finally {
+            qemuPid = -1
+            active = false
+            wakeLock?.let { if (it.isHeld) it.release() }
             stopSelf()
         }
     }
 
+    private fun findPid(): Int {
+        val proc = File("/proc")
+        val children = proc.listFiles() ?: return -1
+        for (dir in children) {
+            if (!dir.isDirectory || !dir.name.all { it.isDigit() }) continue
+            try {
+                val cmdline = File(dir, "cmdline").readBytes()
+                val text = String(cmdline, Charsets.US_ASCII)
+                if (text.contains("libqemu.so")) {
+                    return dir.name.toInt()
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return -1
+    }
+
     private fun status(message: String) {
+        lastStatus = message
         sendBroadcast(
             Intent(ACTION_STATUS)
                 .setPackage(packageName)
@@ -136,15 +190,13 @@ class QemuService : Service() {
     }
 
     override fun onDestroy() {
-        running = false
         try {
             process?.destroy()
         } catch (_: Exception) {
         }
         NativeBridge.nativeShutdown()
-        wakeLock?.let {
-            if (it.isHeld) it.release()
-        }
+        qemuPid = -1
+        active = false
         super.onDestroy()
     }
 }

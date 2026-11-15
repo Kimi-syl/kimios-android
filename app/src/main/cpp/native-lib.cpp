@@ -13,6 +13,34 @@
 #define LOG_TAG "KimiOS-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
+static JavaVM* g_vm = nullptr;
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
+
+void kimios_first_frame() {
+    if (g_vm == nullptr) return;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    jclass cls = env->FindClass("com/kimios/frontend/NativeBridge");
+    if (cls != nullptr) {
+        jmethodID method = env->GetStaticMethodID(cls, "onFirstFrameFromNative", "()V");
+        if (method != nullptr) {
+            env->CallStaticVoidMethod(cls, method);
+        }
+        env->DeleteLocalRef(cls);
+    }
+    if (attached) {
+        g_vm->DetachCurrentThread();
+    }
+}
+
 namespace {
 
 InputQueue g_queue;
