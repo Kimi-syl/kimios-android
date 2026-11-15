@@ -13,8 +13,8 @@ android {
         // QEMU's TCG JIT needs writable+executable memory. Android enforces
         // W^X only for apps targeting API 29+, so stay at 28 (like Termux).
         targetSdk = 28
-        versionCode = 6
-        versionName = "0.3.1"
+        versionCode = 8
+        versionName = "0.4.0"
 
         ndk {
             abiFilters += "arm64-v8a"

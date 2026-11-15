@@ -106,6 +106,8 @@ class QemuService : Service() {
                 "-device", "ramfb",
                 "-device", "virtio-keyboard-device",
                 "-device", "virtio-tablet-device",
+                "-netdev", "user,id=n0",
+                "-device", "virtio-net-device,netdev=n0",
                 "-drive", "if=none,format=raw,file=${disk.absolutePath},id=hd0",
                 "-device", "virtio-blk-device,drive=hd0",
                 "-dtb", File(filesDir, "kimios/virt.dtb").absolutePath,
