@@ -15,27 +15,42 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 static JavaVM* g_vm = nullptr;
+static jclass g_bridge_class = nullptr;
+static jmethodID g_first_frame_method = nullptr;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    // Resolve the class here, on a Java thread with the app classloader.
+    // FindClass from an attached native thread only sees the system classloader.
+    jclass local = env->FindClass("com/kimios/frontend/NativeBridge");
+    if (local == nullptr) {
+        return JNI_ERR;
+    }
+    g_bridge_class = reinterpret_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    g_first_frame_method = env->GetStaticMethodID(g_bridge_class, "onFirstFrameFromNative", "()V");
+    if (g_first_frame_method == nullptr) {
+        return JNI_ERR;
+    }
     return JNI_VERSION_1_6;
 }
 
 void kimios_first_frame() {
-    if (g_vm == nullptr) return;
+    if (g_vm == nullptr || g_bridge_class == nullptr || g_first_frame_method == nullptr) return;
     JNIEnv* env = nullptr;
     bool attached = false;
     if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
         if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
         attached = true;
     }
-    jclass cls = env->FindClass("com/kimios/frontend/NativeBridge");
-    if (cls != nullptr) {
-        jmethodID method = env->GetStaticMethodID(cls, "onFirstFrameFromNative", "()V");
-        if (method != nullptr) {
-            env->CallStaticVoidMethod(cls, method);
-        }
-        env->DeleteLocalRef(cls);
+    env->CallStaticVoidMethod(g_bridge_class, g_first_frame_method);
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
     }
     if (attached) {
         g_vm->DetachCurrentThread();
