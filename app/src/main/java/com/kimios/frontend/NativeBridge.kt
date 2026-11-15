@@ -21,4 +21,5 @@ object NativeBridge {
     external fun nativePointer(x: Float, y: Float, state: Int)
     external fun nativeKey(qcode: String, down: Boolean)
     external fun nativeShutdown()
+    external fun nativeGetLog(): String
 }

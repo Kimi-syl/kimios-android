@@ -57,6 +57,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var toggleButton: Button
     private lateinit var statusView: TextView
     private lateinit var logView: TextView
+    private lateinit var bridgeView: TextView
     private lateinit var memoryView: TextView
     private lateinit var diskInfoView: TextView
     private lateinit var diskFilesView: TextView
@@ -238,6 +239,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         column.addView(logView, LinearLayout.LayoutParams(-1, dp(220)))
 
+        column.addView(title("Display bridge"))
+        bridgeView = TextView(this).apply {
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.rgb(150, 190, 220))
+        }
+        column.addView(bridgeView)
+
         column.addView(title("Memory"))
         memoryView = body("—")
         column.addView(memoryView)
@@ -378,6 +387,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun refreshLogs() {
+        bridgeView.text = try {
+            NativeBridge.nativeGetLog().ifEmpty { "waiting for native bridge…" }
+        } catch (e: Throwable) {
+            "bridge error: ${e.message}"
+        }
         val qemu = tail(File(filesDir, "qemu.log"), 4000)
         val serial = tail(File(filesDir, "serial.log"), 3000)
         val text = "── QEMU ──\n$qemu\n── KimiOS serial ──\n$serial"

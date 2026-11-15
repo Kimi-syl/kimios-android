@@ -1,5 +1,7 @@
 #include "qmp_client.hpp"
 
+#include "native_log.hpp"
+
 #include <android/log.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -85,6 +87,7 @@ bool QmpClient::handshake() {
         return false;
     }
     LOGI("QMP connected: %s", line.c_str());
+    nlog::line("QMP: connected, input injection ready");
     return true;
 }
 

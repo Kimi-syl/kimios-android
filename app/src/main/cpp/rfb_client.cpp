@@ -1,5 +1,7 @@
 #include "rfb_client.hpp"
 
+#include "native_log.hpp"
+
 #include <android/log.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -11,6 +13,12 @@
 #include <cstring>
 
 extern void kimios_first_frame();
+
+namespace {
+void rlog(const char* message) {
+    nlog::line(std::string("RFB: ") + message);
+}
+}
 
 #define LOG_TAG "KimiOS-RFB"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -160,6 +168,7 @@ void RfbClient::blit() {
     ANativeWindow_unlockAndPost(window_);
     if (!first_frame_sent_) {
         first_frame_sent_ = true;
+        rlog("first frame posted to the surface");
         kimios_first_frame();
     }
 }
@@ -232,6 +241,11 @@ bool RfbClient::session() {
         return false;
     }
     LOGI("VNC server init: %dx%d name=%s", fb_width_, fb_height_, name.data());
+    {
+        char info[96];
+        snprintf(info, sizeof(info), "connected, server framebuffer %dx%d", fb_width_, fb_height_);
+        rlog(info);
+    }
     if (fb_width_ <= 0 || fb_height_ <= 0 || fb_width_ > 4096 || fb_height_ > 4096) {
         return false;
     }
@@ -371,9 +385,13 @@ void RfbClient::run() {
         address.sin_port = htons(kVncPort);
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-        if (connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 &&
-            session()) {
+        if (connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+            rlog("connecting to 127.0.0.1:5900 (waiting for QEMU)");
+        } else if (session()) {
             LOGI("VNC session ended");
+            rlog("session ended, reconnecting");
+        } else {
+            rlog("session failed, reconnecting");
         }
         close_socket();
         if (!stopping_) {

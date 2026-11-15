@@ -9,6 +9,7 @@ add_library(kimios-bridge SHARED
     native-lib.cpp
     qmp_client.cpp
     rfb_client.cpp
+    native_log.cpp
 )
 
 if(KIMIOS_ANDROID_LIB_DIR)

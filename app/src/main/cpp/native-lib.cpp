@@ -7,6 +7,7 @@
 #include <string>
 
 #include "input_queue.hpp"
+#include "native_log.hpp"
 #include "qmp_client.hpp"
 #include "rfb_client.hpp"
 
@@ -108,6 +109,12 @@ Java_com_kimios_frontend_NativeBridge_nativeKey(JNIEnv* env, jobject, jstring qc
     event.qcode = to_string(env, qcode);
     event.key_down = down == JNI_TRUE;
     g_queue.push(std::move(event));
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_kimios_frontend_NativeBridge_nativeGetLog(JNIEnv* env, jobject) {
+    const std::string text = nlog::dump();
+    return env->NewStringUTF(text.c_str());
 }
 
 JNIEXPORT void JNICALL
