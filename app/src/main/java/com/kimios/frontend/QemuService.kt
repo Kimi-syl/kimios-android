@@ -41,6 +41,7 @@ class QemuService : Service() {
     }
 
     private var process: Process? = null
+    private var repo: RepoServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var width = 1080
     private var height = 1920
@@ -94,6 +95,9 @@ class QemuService : Service() {
             qmpSocket.delete()
             NativeBridge.nativeInit(qmpSocket.absolutePath)
 
+            // Serve the bundled kpkg repo to the guest (10.0.2.2:8080).
+            repo = RepoServer(this).also { it.start() }
+
             val command = listOf(
                 binary.absolutePath,
                 "-machine", "virt,gic-version=3",
@@ -141,6 +145,7 @@ class QemuService : Service() {
         } finally {
             qemuPid = -1
             active = false
+            repo?.stop()
             wakeLock?.let { if (it.isHeld) it.release() }
             stopSelf()
         }
@@ -198,6 +203,7 @@ class QemuService : Service() {
             process?.destroy()
         } catch (_: Exception) {
         }
+        repo?.stop()
         NativeBridge.nativeShutdown()
         qemuPid = -1
         active = false
