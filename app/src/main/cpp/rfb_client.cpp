@@ -157,11 +157,16 @@ void RfbClient::blit() {
         uint32_t* dst_row = dst + y * dst_stride;
         if (dst_width == fb_width_) {
             memcpy(dst_row, src_row, static_cast<size_t>(fb_width_) * 4);
+            // VNC true-color leaves the high byte 0; force opaque alpha so the
+            // RGBA surface does not show transparent (black) pixels.
+            for (int x = 0; x < fb_width_; ++x) {
+                dst_row[x] |= 0xff000000u;
+            }
         } else {
             for (int x = 0; x < dst_width; ++x) {
                 const int src_x = static_cast<int>(
                     static_cast<int64_t>(x) * fb_width_ / dst_width);
-                dst_row[x] = src_row[src_x];
+                dst_row[x] = src_row[src_x] | 0xff000000u;
             }
         }
     }
@@ -314,6 +319,34 @@ bool RfbClient::session() {
                 const int w = read_u16(rect + 4);
                 const int h = read_u16(rect + 6);
                 const int32_t encoding = static_cast<int32_t>(read_u32(rect + 8));
+
+                // Pseudo-encodings carry metadata, not framebuffer pixels.
+                if (encoding == -223) {  // DesktopSize
+                    if (w > 0 && h > 0 && w <= 4096 && h <= 4096) {
+                        fb_width_ = w;
+                        fb_height_ = h;
+                        framebuffer_.assign(static_cast<size_t>(w) * h, 0xff000000u);
+                        std::lock_guard<std::mutex> lock(window_mutex_);
+                        if (window_ != nullptr) {
+                            ANativeWindow_setBuffersGeometry(window_, w, h,
+                                                             WINDOW_FORMAT_RGBA_8888);
+                        }
+                    }
+                    continue;
+                }
+                if (encoding == -239) {  // Cursor
+                    const size_t bytes = static_cast<size_t>(w) * h * 4 +
+                                         static_cast<size_t>((w + 7) / 8) * h;
+                    std::vector<uint8_t> skip(bytes);
+                    if (!read_full(skip.data(), skip.size())) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (encoding == -224) {  // LastRect
+                    continue;
+                }
+
                 if (x < 0 || y < 0 || w <= 0 || h <= 0 ||
                     x + w > fb_width_ || y + h > fb_height_) {
                     LOGE("VNC rect out of bounds");
