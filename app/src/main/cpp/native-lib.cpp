@@ -129,7 +129,8 @@ Java_com_kimios_frontend_NativeBridge_nativeSurfaceDestroyed(JNIEnv*, jobject) {
 JNIEXPORT jboolean JNICALL
 Java_com_kimios_frontend_NativeBridge_nativeShmStart(JNIEnv* env, jobject, jstring path,
                                                      jlong region_size, jlong fb_offset,
-                                                     jint width, jint height, jint stride_bytes) {
+                                                     jint width, jint height, jint stride_bytes,
+                                                     jlong instr_offset) {
     const std::string ram_path = to_string(env, path);
     std::lock_guard<std::mutex> lock(g_display_mutex);
     if (g_shm) {
@@ -138,7 +139,8 @@ Java_com_kimios_frontend_NativeBridge_nativeShmStart(JNIEnv* env, jobject, jstri
     auto shm = std::make_unique<ShmFbClient>();
     if (!shm->open_mapping(ram_path, static_cast<size_t>(region_size),
                            static_cast<size_t>(fb_offset), width, height,
-                           static_cast<size_t>(stride_bytes))) {
+                           static_cast<size_t>(stride_bytes),
+                           static_cast<size_t>(instr_offset))) {
         return JNI_FALSE;
     }
     ANativeWindow* window = nullptr;
@@ -174,6 +176,7 @@ Java_com_kimios_frontend_NativeBridge_nativePointer(JNIEnv*, jobject, jfloat x, 
     event.x = x;
     event.y = y;
     event.pointer_state = state;
+    event.touch_ns = nlog::now_ns();
     g_queue.push(std::move(event));
 }
 

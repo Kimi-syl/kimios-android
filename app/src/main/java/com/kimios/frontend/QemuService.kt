@@ -205,7 +205,8 @@ class QemuService : Service() {
                 if (process?.isAlive == false) return@Thread
                 try {
                     if (serialLog.exists()) {
-                        val match = pattern.find(serialLog.readText())
+                        val serialText = serialLog.readText()
+                        val match = pattern.find(serialText)
                         if (match != null) {
                             val w = match.groupValues[1].toInt()
                             val h = match.groupValues[2].toInt()
@@ -217,11 +218,20 @@ class QemuService : Service() {
                                 status("Display: VNC (framebuffer outside shared RAM)")
                                 return@Thread
                             }
+                            val instrMatch = Regex(
+                                """instr\s*:\s*mailbox at (0x[0-9a-fA-F]+)""")
+                                .find(serialText)
+                            val instrOffset = if (instrMatch != null) {
+                                (java.lang.Long.parseLong(
+                                    instrMatch.groupValues[1].removePrefix("0x"), 16)
+                                    - 0x40000000L).coerceAtLeast(0L)
+                            } else 0L
                             Log.i(TAG, "ramfb line found: ${w}x${h} phys=0x${
                                 java.lang.Long.toHexString(phys)} offset=0x${
-                                java.lang.Long.toHexString(offset)}")
+                                java.lang.Long.toHexString(offset)} instr=0x${
+                                java.lang.Long.toHexString(instrOffset)}")
                             val ok = NativeBridge.nativeShmStart(
-                                ram.absolutePath, ramBytes, offset, w, h, stride)
+                                ram.absolutePath, ramBytes, offset, w, h, stride, instrOffset)
                             Log.i(TAG, if (ok) "shared-memory display active (VNC bypassed)"
                                 else "shared mapping failed — staying on VNC")
                             status(

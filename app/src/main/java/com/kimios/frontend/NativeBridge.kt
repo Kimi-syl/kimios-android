@@ -33,7 +33,8 @@ object NativeBridge {
         fbOffset: Long,
         width: Int,
         height: Int,
-        strideBytes: Int
+        strideBytes: Int,
+        instrOffset: Long
     ): Boolean
 
     external fun nativeShmStop()

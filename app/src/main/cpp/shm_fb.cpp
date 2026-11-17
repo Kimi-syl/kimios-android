@@ -65,7 +65,8 @@ ShmFbClient::~ShmFbClient() {
 }
 
 bool ShmFbClient::open_mapping(const std::string& path, size_t region_size, size_t fb_offset,
-                               int width, int height, size_t stride_bytes) {
+                               int width, int height, size_t stride_bytes,
+                               size_t instr_offset) {
     if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
         stride_bytes < static_cast<size_t>(width) * 4 || stride_bytes % 4 != 0) {
         LOGE("bad geometry %dx%d stride=%zu", width, height, stride_bytes);
@@ -99,6 +100,9 @@ bool ShmFbClient::open_mapping(const std::string& path, size_t region_size, size
     region_size_ = region_size;
     fb_offset_ = fb_offset;
     fb_ = reinterpret_cast<const uint32_t*>(region_ + fb_offset);
+    if (instr_offset != 0 && instr_offset + 16 * sizeof(uint64_t) <= region_size) {
+        instr_ = reinterpret_cast<volatile uint64_t*>(region_ + instr_offset);
+    }
     fb_width_ = width;
     fb_height_ = height;
     fb_stride_px_ = stride_px;
@@ -210,25 +214,140 @@ void ShmFbClient::blit() {
     }
 }
 
+// Swizzle only the dirty rectangle into the surface (the guest publishes the
+// cumulative region via the mailbox). A key press dirties ~80x80 px, not the
+// whole 1080p frame, so this is ~300x less work than a full-frame blit.
+void ShmFbClient::blit_rect(int x0, int y0, int x1, int y1) {
+    std::lock_guard<std::mutex> lock(window_mutex_);
+    if (window_ == nullptr) {
+        return;
+    }
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_lock(window_, &buffer, nullptr) != 0) {
+        return;
+    }
+    auto* dst = static_cast<uint32_t*>(buffer.bits);
+    const bool direct = buffer.width == fb_width_ && buffer.height == fb_height_;
+    if (direct) {
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > fb_width_) x1 = fb_width_;
+        if (y1 > fb_height_) y1 = fb_height_;
+        if (x0 >= x1 || y0 >= y1) {
+            ANativeWindow_unlockAndPost(window_);
+            return;
+        }
+        const int w = x1 - x0;
+        for (int y = y0; y < y1; ++y) {
+            const uint32_t* src = fb_ + static_cast<size_t>(y) * fb_stride_px_ + x0;
+            swizzle_row(dst + static_cast<size_t>(y) * buffer.stride + x0, src, w);
+            memcpy(shadow_.data() + static_cast<size_t>(y) * fb_stride_px_ + x0,
+                   src, static_cast<size_t>(w) * 4);
+        }
+    } else {
+        // Geometry mismatch (scaling): fall back to a full refresh.
+        for (int y = 0; y < buffer.height; ++y) {
+            const int src_y = static_cast<int>(static_cast<int64_t>(y) * fb_height_ / buffer.height);
+            const uint32_t* srow = fb_ + static_cast<size_t>(src_y) * fb_stride_px_;
+            uint32_t* drow = dst + static_cast<size_t>(y) * buffer.stride;
+            if (buffer.width == fb_width_) {
+                swizzle_row(drow, srow, fb_width_);
+            } else {
+                for (int x = 0; x < buffer.width; ++x) {
+                    drow[x] = swizzle(srow[static_cast<int>(static_cast<int64_t>(x) * fb_width_ / buffer.width)]);
+                }
+            }
+        }
+        memcpy(shadow_.data(), fb_, fb_stride_px_ * fb_height_ * 4);
+    }
+    ANativeWindow_unlockAndPost(window_);
+    if (!first_frame_sent_) {
+        first_frame_sent_ = true;
+        slog("first frame posted to the surface");
+        LOGI("first frame posted to the surface");
+        kimios_first_frame();
+    }
+}
+
 void ShmFbClient::run() {
     using clock = std::chrono::steady_clock;
-    const auto interval = std::chrono::milliseconds(16);
+    // With the mailbox we poll a single frame counter (cheap) at 1 ms and blit
+    // only the dirty rect; without it, fall back to full-frame memcmp at 16 ms.
+    const auto interval = instr_ != nullptr ? std::chrono::milliseconds(1)
+                                            : std::chrono::milliseconds(16);
     auto next = clock::now();
     auto stats_start = clock::now();
     uint64_t frames = 0;
     uint64_t blit_ns = 0;
     const size_t frame_bytes = fb_stride_px_ * fb_height_ * 4;
+    uint64_t last_frame = 0;
+    bool have_last = false;
 
     while (!stopping_) {
         next += interval;
         const bool refresh = force_refresh_.exchange(false, std::memory_order_relaxed);
-        if (has_window_.load(std::memory_order_relaxed) &&
-            (refresh || memcmp(fb_, shadow_.data(), frame_bytes) != 0)) {
-            const auto t0 = clock::now();
-            blit();
-            blit_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           clock::now() - t0).count();
-            ++frames;
+        if (has_window_.load(std::memory_order_relaxed)) {
+            bool do_blit = false;
+            bool full = false;
+            uint64_t accum = 0;
+            uint64_t frame = 0;
+            if (instr_ != nullptr) {
+                frame = instr_[12];
+                if (refresh || !have_last) {
+                    do_blit = true;
+                    full = true;
+                } else if (frame != last_frame) {
+                    do_blit = true;
+                    accum = instr_[10];
+                    full = (accum == 0);
+                }
+            } else if (refresh || memcmp(fb_, shadow_.data(), frame_bytes) != 0) {
+                do_blit = true;
+                full = true;
+            }
+
+            if (do_blit) {
+                const int64_t start_ns = nlog::now_ns();
+                uint64_t seq = 0, ival = 0, input = 0, handler = 0, drawn = 0;
+                uint64_t present = 0, hb = 0, cntfrq = 0, rect = 0;
+                if (instr_ != nullptr) {
+                    seq = instr_[1]; cntfrq = instr_[2]; hb = instr_[3];
+                    input = instr_[4]; handler = instr_[5]; drawn = instr_[6];
+                    present = instr_[7]; rect = instr_[8]; ival = instr_[9];
+                }
+                const auto t0 = clock::now();
+                if (full) {
+                    blit();
+                } else {
+                    const int x0 = static_cast<int>(accum & 0xffff);
+                    const int y0 = static_cast<int>((accum >> 16) & 0xffff);
+                    const int x1 = static_cast<int>((accum >> 32) & 0xffff);
+                    const int y1 = static_cast<int>((accum >> 48) & 0xffff);
+                    blit_rect(x0, y0, x1, y1);
+                    rect = accum;
+                }
+                blit_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               clock::now() - t0).count();
+                ++frames;
+                if (instr_ != nullptr) {
+                    instr_[11] = frame;  // ACK: guest may reset its accumulation
+                    last_frame = frame;
+                    have_last = true;
+                    LOGI("LAT_BLIT start=%lld done=%lld seq=%llu ival=%llu input=%llu "
+                         "handler=%llu drawn=%llu present=%llu hb=%llu cntfrq=%llu rect=%llu",
+                         static_cast<long long>(start_ns),
+                         static_cast<long long>(nlog::now_ns()),
+                         static_cast<unsigned long long>(seq),
+                         static_cast<unsigned long long>(ival),
+                         static_cast<unsigned long long>(input),
+                         static_cast<unsigned long long>(handler),
+                         static_cast<unsigned long long>(drawn),
+                         static_cast<unsigned long long>(present),
+                         static_cast<unsigned long long>(hb),
+                         static_cast<unsigned long long>(cntfrq),
+                         static_cast<unsigned long long>(rect));
+                }
+            }
         }
 
         const auto now = clock::now();

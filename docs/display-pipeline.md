@@ -151,10 +151,54 @@ SurfaceFlinger composite. Latency drops from "~30 ms VNC + pipeline" to "~one
 16 ms poll + memcpy", and idle cost is near zero (memcmp gate).
 
 ### Remaining work (optional optimizations)
-- Replace the 16 ms poll with a shared dirty counter / eventfd bumped by the
-  guest on `fb_present` for zero idle wakeups and sub-frame latency.
 - `AHardwareBuffer` zero-copy into the surface (saves the NEON swizzle row copy).
-- Copy only the guest's dirty rect instead of the full frame when posting.
+- Replace the QMP input path with a shared-memory input ring to cut the
+  QMP -> guest delivery latency (see section 5 — now the dominant term).
+
+## 5. Latency instrumentation & OSK optimization (v0.8.2)
+
+To find the real bottleneck before changing anything, the whole touch -> display
+path is instrumented. The guest writes ARM generic-counter (CNTPCT) timestamps
+into a small **mailbox page** in shared guest RAM (`src/instr.rs`, mapped into the
+GUI via `SYS_INSTR_MAP`; EL0 counter access enabled in `timer.rs`). Android reads
+the mailbox out of `ram.img` and stamps its own `CLOCK_MONOTONIC` times, then
+correlates the two clocks via a heartbeat field.
+
+Stages: Android touch received -> QMP sent -> guest input delivered -> OSK
+handler -> highlight drawn -> `fb_present` -> shm blit complete.
+
+**Measured (host QEMU, aarch64 TCG; guest counter 62.5 MHz):**
+
+| stage | latency |
+|---|---|
+| guest input -> OSK handler | ~0.02 ms |
+| OSK handler -> highlight drawn (ring render) | ~0.3 ms |
+| highlight drawn -> `fb_present` (dirty-rect copy) | ~0.03 ms |
+| **guest internal total (input -> present)** | **~0.4 ms** |
+| QMP send -> guest input delivered | ~11 ms (QEMU transport + input poll) |
+| present -> client detect (16 ms poll, before) | ~8 ms avg |
+| full-frame NEON swizzle blit (before) | ~1.9 ms host / ~9.3 ms device |
+
+The guest does its whole job in **~0.4 ms** — rendering is *not* the bottleneck.
+The cost was the Android **full-frame blit** (the press only dirties an **81x81 =
+6561 px** rect, 0.316% of the 1080p frame) and the **16 ms poll**, plus the QMP
+input transport.
+
+**Optimizations applied (within the existing architecture):**
+1. **Dirty-rect blit.** The guest publishes a cumulative dirty rect (union of
+   presents since the frontend acked) in the mailbox (`ACCUM`/`ACK`/`FRAME`
+   slots). The client blits only that region. Host NEON benchmark: full-frame
+   swizzle **1.879 ms** -> 81x81 rect **0.0036 ms** (**529x** less work). The
+   ack protocol guarantees no dirty region is missed between polls.
+2. **1 ms frame-counter poll.** Instead of `memcmp`-ing the whole 8 MB frame every
+   16 ms, the client polls the 8-byte `FRAME` counter every 1 ms and blits on
+   change. Measured present -> detect: **0.59 ms** (was ~8 ms).
+3. **2 ms guest input poll** (was 8 ms) to shrink input-delivery latency.
+
+**Result:** the display-side latency (present -> pixels) drops from ~17 ms to
+~0.6 ms; the blit from ~9 ms to ~0.004 ms. The remaining dominant term is the
+**QMP -> guest input delivery (~11 ms)**, which is QEMU's input transport — the
+next lever (a shared-memory input ring) is an architecture change, deferred.
 
 ## 4. GPU acceleration / direct rendering — honest assessment
 

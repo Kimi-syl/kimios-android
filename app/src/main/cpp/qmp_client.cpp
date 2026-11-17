@@ -145,6 +145,11 @@ void QmpClient::send_event(const InputEvent& event) {
         close_socket();
         return;
     }
+    if (event.kind == InputKind::Pointer && event.touch_ns != 0) {
+        LOGI("LAT_TOUCH touch=%lld qmp=%lld state=%d",
+             static_cast<long long>(event.touch_ns),
+             static_cast<long long>(nlog::now_ns()), event.pointer_state);
+    }
     drain_responses();
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -15,6 +16,7 @@ struct InputEvent {
     int pointer_state = 0;
     bool key_down = false;
     std::string qcode;
+    int64_t touch_ns = 0;  // CLOCK_MONOTONIC at nativePointer entry (latency probe)
 };
 
 class InputQueue {
