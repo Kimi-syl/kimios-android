@@ -73,6 +73,13 @@ void RfbClient::set_window(ANativeWindow* window) {
     }
 }
 
+ANativeWindow* RfbClient::take_window() {
+    std::lock_guard<std::mutex> lock(window_mutex_);
+    ANativeWindow* window = window_;
+    window_ = nullptr;
+    return window;
+}
+
 void RfbClient::start() {
     stopping_ = false;
     if (thread_.joinable()) {

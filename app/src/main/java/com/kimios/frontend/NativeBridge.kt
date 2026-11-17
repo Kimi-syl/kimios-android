@@ -22,4 +22,19 @@ object NativeBridge {
     external fun nativeKey(qcode: String, down: Boolean)
     external fun nativeShutdown()
     external fun nativeGetLog(): String
+
+    // Switches the display from VNC to the shared-memory framebuffer.
+    // path: file backing QEMU guest RAM (memory-backend-file,share=on).
+    // fbOffset: framebuffer guest-physical address minus 0x40000000 (virt RAM base).
+    // Returns false if the mapping failed; VNC then stays active.
+    external fun nativeShmStart(
+        path: String,
+        regionSize: Long,
+        fbOffset: Long,
+        width: Int,
+        height: Int,
+        strideBytes: Int
+    ): Boolean
+
+    external fun nativeShmStop()
 }

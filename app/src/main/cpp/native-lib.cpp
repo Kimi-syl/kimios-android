@@ -4,12 +4,14 @@
 #include <android/native_window_jni.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "input_queue.hpp"
 #include "native_log.hpp"
 #include "qmp_client.hpp"
 #include "rfb_client.hpp"
+#include "shm_fb.hpp"
 
 #define LOG_TAG "KimiOS-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -62,6 +64,10 @@ namespace {
 InputQueue g_queue;
 std::unique_ptr<QmpClient> g_qmp;
 std::unique_ptr<RfbClient> g_rfb;
+std::unique_ptr<ShmFbClient> g_shm;
+// Serializes display-client lifecycle: surface callbacks run on the main
+// thread, nativeShmStart on the service's shm-watcher thread.
+std::mutex g_display_mutex;
 
 std::string to_string(JNIEnv* env, jstring value) {
     const char* chars = env->GetStringUTFChars(value, nullptr);
@@ -90,21 +96,75 @@ Java_com_kimios_frontend_NativeBridge_nativeSurfaceCreated(JNIEnv* env, jobject,
     if (window == nullptr) {
         return;
     }
-    if (!g_rfb) {
-        g_rfb = std::make_unique<RfbClient>();
+    // set_window takes ownership of the reference from fromSurface (it
+    // releases the previous window); do not release it again here.
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    if (g_shm) {
+        g_shm->set_window(window);
+        g_shm->start();
+    } else {
+        if (!g_rfb) {
+            g_rfb = std::make_unique<RfbClient>();
+        }
+        g_rfb->set_window(window);
+        g_rfb->start();
     }
-    g_rfb->set_window(window);
-    g_rfb->start();
     LOGI("surface attached");
 }
 
 JNIEXPORT void JNICALL
 Java_com_kimios_frontend_NativeBridge_nativeSurfaceDestroyed(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    if (g_shm) {
+        g_shm->stop();
+        g_shm->set_window(nullptr);
+    }
     if (g_rfb) {
         g_rfb->stop();
         g_rfb->set_window(nullptr);
     }
     LOGI("surface detached");
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_kimios_frontend_NativeBridge_nativeShmStart(JNIEnv* env, jobject, jstring path,
+                                                     jlong region_size, jlong fb_offset,
+                                                     jint width, jint height, jint stride_bytes) {
+    const std::string ram_path = to_string(env, path);
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    if (g_shm) {
+        return JNI_TRUE;
+    }
+    auto shm = std::make_unique<ShmFbClient>();
+    if (!shm->open_mapping(ram_path, static_cast<size_t>(region_size),
+                           static_cast<size_t>(fb_offset), width, height,
+                           static_cast<size_t>(stride_bytes))) {
+        return JNI_FALSE;
+    }
+    ANativeWindow* window = nullptr;
+    if (g_rfb) {
+        g_rfb->stop();
+        window = g_rfb->take_window();
+    }
+    if (window != nullptr) {
+        // take_window hands over its reference; set_window owns it now.
+        shm->set_window(window);
+    }
+    shm->start();
+    g_shm = std::move(shm);
+    LOGI("shared-memory display active (VNC client stopped)");
+    return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_kimios_frontend_NativeBridge_nativeShmStop(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    if (g_shm) {
+        g_shm->stop();
+        g_shm->set_window(nullptr);
+        g_shm.reset();
+        LOGI("shared-memory display stopped");
+    }
 }
 
 JNIEXPORT void JNICALL
@@ -134,9 +194,15 @@ Java_com_kimios_frontend_NativeBridge_nativeGetLog(JNIEnv* env, jobject) {
 
 JNIEXPORT void JNICALL
 Java_com_kimios_frontend_NativeBridge_nativeShutdown(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(g_display_mutex);
     if (g_qmp) {
         g_qmp->stop();
         g_qmp.reset();
+    }
+    if (g_shm) {
+        g_shm->stop();
+        g_shm->set_window(nullptr);
+        g_shm.reset();
     }
     if (g_rfb) {
         g_rfb->stop();

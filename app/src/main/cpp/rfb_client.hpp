@@ -14,6 +14,9 @@ public:
     ~RfbClient();
 
     void set_window(ANativeWindow* window);
+    // Hands the window reference to another display client without releasing
+    // it (used when the shared-memory path takes over from VNC).
+    ANativeWindow* take_window();
     void start();
     void stop();
 

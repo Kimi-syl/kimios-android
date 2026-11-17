@@ -9,6 +9,7 @@ add_library(kimios-bridge SHARED
     native-lib.cpp
     qmp_client.cpp
     rfb_client.cpp
+    shm_fb.cpp
     native_log.cpp
 )
 

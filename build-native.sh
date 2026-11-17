@@ -17,7 +17,7 @@ cmake -S app/src/main/cpp -B "$BUILD_DIR" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DKIMIOS_ANDROID_LIB_DIR="$STUB_DIR"
-cmake --build "$BUILD_DIR" -j"$(nproc 2>/dev/null || echo 4)"
+cmake --build "$BUILD_DIR" -j"${KIMIOS_BUILD_JOBS:-2}"
 
 mkdir -p "$JNI_DIR"
 cp "$BUILD_DIR/libkimios-bridge.so" "$JNI_DIR/"
