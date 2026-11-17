@@ -69,7 +69,7 @@ void RfbClient::set_window(ANativeWindow* window) {
     if (window_ != nullptr) {
         const int w = fb_width_ > 0 ? fb_width_ : kTargetWidth;
         const int h = fb_height_ > 0 ? fb_height_ : kTargetHeight;
-        ANativeWindow_setBuffersGeometry(window_, w, h, WINDOW_FORMAT_RGBA_8888);
+        ANativeWindow_setBuffersGeometry(window_, w, h, WINDOW_FORMAT_RGBX_8888);
     }
 }
 
@@ -150,23 +150,29 @@ void RfbClient::blit() {
     const int dst_height = buffer.height;
     const int dst_stride = buffer.stride;
 
-    for (int y = 0; y < dst_height; ++y) {
-        const int src_y = static_cast<int>(
-            static_cast<int64_t>(y) * fb_height_ / dst_height);
-        const uint32_t* src_row = framebuffer_.data() + src_y * fb_width_;
-        uint32_t* dst_row = dst + y * dst_stride;
-        if (dst_width == fb_width_) {
-            memcpy(dst_row, src_row, static_cast<size_t>(fb_width_) * 4);
-            // VNC true-color leaves the high byte 0; force opaque alpha so the
-            // RGBA surface does not show transparent (black) pixels.
-            for (int x = 0; x < fb_width_; ++x) {
-                dst_row[x] |= 0xff000000u;
-            }
-        } else {
-            for (int x = 0; x < dst_width; ++x) {
-                const int src_x = static_cast<int>(
-                    static_cast<int64_t>(x) * fb_width_ / dst_width);
-                dst_row[x] = src_row[src_x] | 0xff000000u;
+    // The surface buffer is sized to the framebuffer (RGBX_8888, alpha ignored)
+    // and stretched to the view by the compositor in hardware, so the common
+    // path is a straight row memcpy with no scaling or color conversion.
+    if (dst_width == fb_width_ && dst_height == fb_height_) {
+        for (int y = 0; y < fb_height_; ++y) {
+            memcpy(dst + static_cast<size_t>(y) * dst_stride,
+                   framebuffer_.data() + static_cast<size_t>(y) * fb_width_,
+                   static_cast<size_t>(fb_width_) * 4);
+        }
+    } else {
+        for (int y = 0; y < dst_height; ++y) {
+            const int src_y = static_cast<int>(
+                static_cast<int64_t>(y) * fb_height_ / dst_height);
+            const uint32_t* src_row = framebuffer_.data() + src_y * fb_width_;
+            uint32_t* dst_row = dst + y * dst_stride;
+            if (dst_width == fb_width_) {
+                memcpy(dst_row, src_row, static_cast<size_t>(fb_width_) * 4);
+            } else {
+                for (int x = 0; x < dst_width; ++x) {
+                    const int src_x = static_cast<int>(
+                        static_cast<int64_t>(x) * fb_width_ / dst_width);
+                    dst_row[x] = src_row[src_x];
+                }
             }
         }
     }
@@ -251,7 +257,7 @@ bool RfbClient::session() {
         std::lock_guard<std::mutex> lock(window_mutex_);
         if (window_ != nullptr) {
             ANativeWindow_setBuffersGeometry(window_, fb_width_, fb_height_,
-                                             WINDOW_FORMAT_RGBA_8888);
+                                             WINDOW_FORMAT_RGBX_8888);
         }
     }
     {
@@ -329,7 +335,7 @@ bool RfbClient::session() {
                         std::lock_guard<std::mutex> lock(window_mutex_);
                         if (window_ != nullptr) {
                             ANativeWindow_setBuffersGeometry(window_, w, h,
-                                                             WINDOW_FORMAT_RGBA_8888);
+                                                             WINDOW_FORMAT_RGBX_8888);
                         }
                     }
                     continue;

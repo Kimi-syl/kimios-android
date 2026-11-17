@@ -105,7 +105,7 @@ class QemuService : Service() {
                 "-smp", vcpus.toString(),
                 "-m", "${ramMb}M",
                 "-display", "none",
-                "-vnc", "127.0.0.1:0",
+                "-vnc", "127.0.0.1:0,non-adaptive=on,lossy=off",
                 "-qmp", "unix:${qmpSocket.absolutePath},server,nowait",
                 "-device", "ramfb",
                 "-device", "virtio-keyboard-device",
